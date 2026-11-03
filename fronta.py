@@ -146,11 +146,18 @@ class Tenrai:
     def initial_list(self):
         last = self.state.data.get("list_last")
         page = 1
+        blind_failures = 0
         while last is None or page <= last:
             key = f"asc:{page}"
             record = self.state.get("list", key, pages=True)
             if not record[0] and self.state.eligible("list", key, self.today, pages=True):
                 body = self.page(page, "asc")
+                if body is None and last is None:
+                    # Bez známé poslední stránky se naslepo nezkouší dál
+                    # než pár stránek (výpadek by jinak pálil noc na prázdno).
+                    blind_failures += 1
+                    if blind_failures >= 3:
+                        return
                 if body is not None:
                     advertised = body.get("pagination", {}).get("last_visible_page")
                     if type(advertised) is int and advertised > 0:

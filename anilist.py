@@ -125,8 +125,8 @@ class AniList:
     def query(self, endpoint, query, variables=None):
         if self.bulk and self.today_fn() >= ANILIST_SVOLENI_DO:
             raise StopSource("Svolení ke snímku skončilo")
-        if not self.state.eligible("al_odpoved", endpoint, self.today, age=0):
-            return Response(0)
+        # Vadná odpověď se jen zaznamená. Den nezamyká: jedna stránka nesmí
+        # zastavit zbytek snímku před koncem svolení.
         response = self.client.request(endpoint, BASE, {"query": query, "variables": variables or {}},
                                        self.deadline)
         if response.status == 200 and endpoint in ("snimek", "zmeny", "okoli", "vzorek"):
@@ -241,11 +241,18 @@ class AniList:
                         todo=[new_slice(adult, lo, hi) for adult in (False, True) for lo, hi in BOUNDS])
         if not self.tags(snapshot=True):
             return
-        while snap["todo"]:
+        # Řez, jehož stránka selhala, jde na konec fronty a ostatní pokračují.
+        # Když dnes selhávají všechny zbylé řezy nebo chyb je moc, řezy končí
+        # a noc pokračuje dostahováním už uložených médií.
+        failures = skipped = 0
+        while snap["todo"] and failures < 20 and skipped < len(snap["todo"]):
             part = snap["todo"][0]
             key = f"{int(part['adult'])}:{part['lo']}:{part['hi']}:{part['page']}:{int(part['reverse'])}"
             if not self.state.eligible("al_pages", key, self.today, age=0):
-                return
+                snap["todo"].append(snap["todo"].pop(0))
+                skipped += 1
+                continue
+            skipped = 0
             # Ostré nerovnosti na API odpovídají zdejší uzavřené celočíselné mezi.
             query = ("query($page:Int,$adult:Boolean,$greater:Int,$lesser:Int){"
                      "Page(page:$page,perPage:50){pageInfo{hasNextPage}"
@@ -257,7 +264,9 @@ class AniList:
             response = self.query("snimek", query, variables)
             if response.status != 200:
                 self.state.failure("al_pages", key, self.today, response.status)
-                return
+                failures += 1
+                snap["todo"].append(snap["todo"].pop(0))
+                continue
             try:
                 page = response.body["data"]["Page"]
                 rows = page["media"]
@@ -266,7 +275,9 @@ class AniList:
                     raise TypeError("Neplatná stránka")
             except Exception:
                 self.state.failure("al_pages", key, self.today, 0)
-                return
+                failures += 1
+                snap["todo"].append(snap["todo"].pop(0))
+                continue
             self.state.success("al_pages", key, self.today)
             valid_ids = []
             met = False
@@ -300,7 +311,7 @@ class AniList:
                 # U otevřené horní meze volíme pozorovanou hodnotu, obě poloviny
                 # přesto pokrývají původní rozsah včetně nepozorovaného ocasu.
                 cut_high = high if high is not None else part["observed_hi"]
-                if high == low or part["observed_lo"] == part["observed_hi"] == low == high:
+                if high == low:
                     snap["incomplete"].append([part["adult"], low, high])
                     snap["todo"].pop(0)
                     self.log(f"anilist snimek: neúplných řezů {len(snap['incomplete'])}")
@@ -310,7 +321,7 @@ class AniList:
                     snap["todo"][:1] = [new_slice(part["adult"], low, middle),
                                          new_slice(part["adult"], middle + 1, high)]
         self.finish_recommendations()
-        if self.al["pending"]:
+        if snap["todo"] or self.al["pending"]:
             return
         response = self.query("pocet", "{ SiteStatistics { anime(sort: DATE_DESC, perPage: 1) { nodes { count } } } }")
         if response.status != 200:
@@ -426,23 +437,23 @@ class AniList:
                 for ident in batch:
                     self.state.failure("al_mal", ident, self.today, 0)
                 continue
-            failed = set()
+            failed, saved = set(), set()
             for index, media in enumerate(rows):
+                mal = media.get("idMal") if isinstance(media, dict) else None
                 try:
-                    if not self.save_media(media):
-                        mal = media.get("idMal") if isinstance(media, dict) else None
+                    if self.save_media(media):
+                        saved.add(mal)
+                    else:
                         failed.add(mal)
-                        if mal is None:
-                            failed.update(batch)
                 except Exception:
                     ident = media.get("id") if isinstance(media, dict) else None
-                    mal = media.get("idMal") if isinstance(media, dict) else None
                     self.state.failure("anilist", ident if type(ident) is int else f"{endpoint}:{offset}:{index}", self.today, 0)
                     failed.add(mal)
-                    if mal is None:
-                        failed.update(batch)
+            # Vadné médium bez idMal nejde přiřadit. Neuspějí jen anime dávky,
+            # která se platně neuložila, uložená zůstanou úspěšná.
+            unknown = None in failed
             for ident in batch:
-                if ident in failed:
+                if ident in failed or (unknown and ident not in saved):
                     self.state.failure("al_mal", ident, self.today, 0)
                 else:
                     # Nenalezené idMal je platný prázdný výsledek.

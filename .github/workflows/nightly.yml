@@ -39,7 +39,9 @@ defaults:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 290
+    # 270 minut stahování a rezerva na checkout, sestavení webu a push
+    # (pushe na GitHub umí trvat i 20 minut). Strop GitHubu je 360.
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
         with:
