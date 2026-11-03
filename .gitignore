@@ -1,0 +1,13 @@
+# Skutečné odpovědi API jen lokálně (data MAL a AniListu do repa nikdy)
+_nahravky/
+
+# Data běhu patří do soukromé větve animedb, sem nikdy
+/data/
+/animedb/
+/raw/
+/web/
+/state.json
+
+__pycache__/
+*.pyc
+.venv/

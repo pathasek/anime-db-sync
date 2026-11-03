@@ -1,0 +1,219 @@
+name: Noční stahování databáze
+
+# Stahuje databázi MAL (přes Tenrai) a AniList pro osobní web. Surová data,
+# stav a soubory pro web jdou do soukromé větve animedb jedním commitem bez
+# historie, v tomhle veřejném repu leží jen skript. Výjimka: AniList je do
+# 11. 11. 2026 i ve větvi anilist tohoto repa (svolení AniListu), od 11. 11.
+# ji workflow samo smaže.
+# Logy jsou veřejné: jen počty, stav a velikosti, nikdy obsah odpovědí.
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 2:00 v zimě, 3:00 v létě
+  workflow_dispatch:
+    inputs:
+      minuty:
+        description: 'Kolik minut stahovat (nejvýš 270)'
+        required: false
+        default: '270'
+
+# Zápis jen kvůli větvi anilist (do 11. 11. 2026). Do soukromého repa se
+# píše přes secret ANIMEDB_TOKEN (fine-grained, Contents jen na to repo).
+permissions:
+  contents: write
+
+# Ruční a plánovaný běh nikdy souběžně: strop 108 dotazů za minutu platí
+# pro všechny běhy dohromady, jako by runnery měly jednu IP.
+concurrency:
+  group: animedb-sync
+  cancel-in-progress: false
+
+env:
+  SOUKROME_REPO: pathasek/anime-list-web-src
+  SVOLENI_ANILIST_DO: '20261111'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 290
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Testy (bez sítě)
+        run: python -m unittest discover -s tests -t .
+
+      # Data se klonují do RUNNER_TEMP, mimo pracovní strom veřejného repa,
+      # takže se do něj nemůžou omylem dostat.
+      - name: Data ze soukromé větve animedb
+        id: data
+        env:
+          TOKEN: ${{ secrets.ANIMEDB_TOKEN }}
+        run: |
+          D="$RUNNER_TEMP/animedb"
+          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git init -q "$D"
+          git -C "$D" config http.https://github.com/.extraheader "AUTHORIZATION: basic $AUTH"
+          git -C "$D" remote add origin "https://github.com/$SOUKROME_REPO.git"
+          # Kód 2 = větev neexistuje (první běh). Cokoli jiného (token,
+          # síť) běh zastaví: prázdný začátek by jinak přepsal stažená data.
+          set +e
+          git -C "$D" ls-remote --exit-code --heads origin animedb > /dev/null
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            git -C "$D" fetch -q --depth 1 origin animedb
+            git -C "$D" checkout -q --detach FETCH_HEAD
+            echo "Větev animedb načtená."
+          elif [ "$rc" -eq 2 ]; then
+            echo "Větev animedb zatím není, první běh začne prázdný."
+          else
+            echo "::error::Soukromé repo nejde přečíst (kód $rc), zkontroluj secret ANIMEDB_TOKEN."
+            exit 1
+          fi
+          # Při pipefail by find nad chybějící složkou shodil první běh.
+          mkdir -p "$D/raw"
+          (cd "$D" && find raw -type f | sort) > "$RUNNER_TEMP/raw_pred.txt"
+          echo "Souborů v raw/ před během: $(wc -l < "$RUNNER_TEMP/raw_pred.txt")"
+
+      # Okolí AniListu potřebuje viděná anime a Plan to Watch z dat webu.
+      # Bez nich jede okolí jen z vysílaných a ohlášených, proto smí selhat.
+      - name: Osobní seznamy pro okolí AniListu
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.ANIMEDB_TOKEN }}
+        run: |
+          O="$RUNNER_TEMP/osobni"
+          mkdir -p "$O"
+          for f in anime_list.json plan_to_watch.json; do
+            curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+              "https://api.github.com/repos/$SOUKROME_REPO/contents/public/data/$f?ref=main" -o "$O/$f"
+          done
+          echo "Osobní seznamy načtené."
+
+      # AniList a Tenrai jsou různé služby s vlastními limity, běží proto
+      # souběžně jako dva procesy. Každý má vlastní stav a vlastní bloky raw/.
+      - name: Stahování
+        id: sync
+        if: steps.data.outcome == 'success'
+        env:
+          MINUTY: ${{ inputs.minuty || '270' }}
+        run: |
+          D="$RUNNER_TEMP/animedb"
+          O="$RUNNER_TEMP/osobni"
+          python sync.py --zdroj anilist --data "$D" --osobni "$O" --minutes "$MINUTY" --anilist-rate 20 &
+          al=$!
+          # Zrušení běhu ukončí i proces AniListu, ať stihne uložit stav.
+          trap 'kill -TERM "$al" 2> /dev/null' INT TERM
+          set +e
+          python sync.py --zdroj tenrai --data "$D" --osobni "$O" --minutes "$MINUTY" --rate 108
+          tenrai_rc=$?
+          wait "$al"
+          al_rc=$?
+          set -e
+          echo "Konec stahování: Tenrai $tenrai_rc, AniList $al_rc."
+          [ "$tenrai_rc" -eq 0 ] && [ "$al_rc" -eq 0 ]
+
+      # Běží i po pádu stahování: sync.py uloží stav ve finally, takže se
+      # uloží všechno, co do pádu stihl.
+      - name: Soubory pro web
+        if: always() && steps.data.outcome == 'success'
+        run: python build_web.py --data "$RUNNER_TEMP/animedb"
+
+      - name: Uložení do soukromé větve animedb
+        id: ulozeni
+        if: always() && steps.data.outcome == 'success'
+        run: |
+          D="$RUNNER_TEMP/animedb"
+          cd "$D"
+          if [ ! -f state.json ]; then
+            echo "::error::Chybí state.json, neukládám."
+            exit 1
+          fi
+          # Pojistky: žádný dřív uložený blok nesmí zmizet a GitHub odmítá
+          # soubory nad 100 MB.
+          find raw -type f | sort > "$RUNNER_TEMP/raw_po.txt"
+          chybi=$(comm -23 "$RUNNER_TEMP/raw_pred.txt" "$RUNNER_TEMP/raw_po.txt" | wc -l)
+          if [ "$chybi" -gt 0 ]; then
+            echo "::error::Z raw/ zmizelo $chybi dřív uložených souborů, neukládám."
+            exit 1
+          fi
+          po=$(wc -l < "$RUNNER_TEMP/raw_po.txt")
+          velke=$(find . -path ./.git -prune -o -type f -size +95M -print | wc -l)
+          if [ "$velke" -gt 0 ]; then
+            echo "::error::$velke souborů má přes 95 MB, neukládám."
+            exit 1
+          fi
+          echo "raw/: $po souborů, $(du -sh raw | cut -f1). web/: $(find web -type f | wc -l) souborů, $(du -sh web | cut -f1)."
+          git config user.name "anime-db-sync"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          tree=$(git write-tree)
+          # Jeden commit bez rodiče: větev animedb nemá historii.
+          commit=$(git commit-tree "$tree" -m "Data $(date -u +%Y-%m-%d)")
+          git push -q --force origin "$commit:refs/heads/animedb"
+          echo "Větev animedb uložená."
+
+      # Web si data bere při každém nasazení a nasazuje se skoro denně.
+      # Sám noční běh nasadí jen tehdy, když main 3 dny nic nedostal (šetří
+      # minuty soukromého repa). deploy.yml poslouchá repository_dispatch.
+      - name: Nasazení webu, když 3 dny neproběhlo
+        if: always() && steps.ulozeni.outcome == 'success'
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.ANIMEDB_TOKEN }}
+        run: |
+          posledni=$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/$SOUKROME_REPO/commits/main" \
+            | python -c 'import json, sys; print(json.load(sys.stdin)["commit"]["committer"]["date"])')
+          dni=$(( ( $(date -u +%s) - $(date -u -d "$posledni" +%s) ) / 86400 ))
+          if [ "$dni" -ge 3 ]; then
+            curl -fsSL -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$SOUKROME_REPO/dispatches" -d '{"event_type":"animedb"}'
+            echo "Main $dni dní beze změny, spuštěno nasazení webu."
+          else
+            echo "Main změněn před $dni dny, data přibalí běžné nasazení."
+          fi
+
+      - name: AniList ve veřejném repu (jen do 11. 11. 2026)
+        if: always() && steps.data.outcome == 'success'
+        continue-on-error: true
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          HDR="http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH"
+          URL="https://github.com/$GITHUB_REPOSITORY.git"
+          A="$RUNNER_TEMP/animedb/raw/anilist"
+          if [ "$(date -u +%Y%m%d)" -lt "$SVOLENI_ANILIST_DO" ]; then
+            if [ -f "$A/meta.json" ]; then
+              P="$RUNNER_TEMP/anilist-verejne"
+              mkdir -p "$P"
+              cp -r "$A" "$P/anilist"
+              git init -q "$P"
+              cd "$P"
+              git config user.name "anime-db-sync"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add -A
+              tree=$(git write-tree)
+              commit=$(git commit-tree "$tree" -m "AniList $(date -u +%Y-%m-%d)")
+              git -c "$HDR" push -q --force "$URL" "$commit:refs/heads/anilist"
+              echo "Větev anilist uložená."
+            else
+              echo "AniList zatím není stažený."
+            fi
+          elif git ls-remote --exit-code --heads "$URL" anilist > /dev/null; then
+            git -c "$HDR" push -q "$URL" --delete anilist
+            echo "Svolení AniListu skončilo, větev anilist smazaná."
+          fi
