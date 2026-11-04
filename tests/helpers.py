@@ -116,9 +116,12 @@ class Server:
         elif "idMal_in" in query:
             rows = [row for row in rows if row.get("idMal") in variables["ids"]]
         else:
+            # Skutečný AniList explicitní null u meze odmítá (3. 11. 2026).
+            if "lesser" in variables and variables["lesser"] is None:
+                return Response(400, {"errors": [{"message": "Vymyšlená chyba nulové meze"}]})
             rows = [row for row in rows if row["isAdult"] == variables["adult"]
                     and row["popularity"] > variables["greater"]
-                    and (variables["lesser"] is None or row["popularity"] < variables["lesser"])]
+                    and ("lesser" not in variables or row["popularity"] < variables["lesser"])]
             rows = sorted(rows, key=lambda row: row["id"], reverse="sort:ID_DESC" in query)
         start = (page - 1) * 50
         return Response(200, {"data": {"Page": {"pageInfo": {"total": 5000, "lastPage": 100,

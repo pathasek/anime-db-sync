@@ -40,8 +40,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     # 270 minut stahování a rezerva na checkout, sestavení webu a push
-    # (pushe na GitHub umí trvat i 20 minut). Strop GitHubu je 360.
-    timeout-minutes: 340
+    # s opakováním (pushe na GitHub umí trvat i 20 minut). Strop GitHubu je 360.
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
         with:
@@ -163,8 +163,19 @@ jobs:
           tree=$(git write-tree)
           # Jeden commit bez rodiče: větev animedb nemá historii.
           commit=$(git commit-tree "$tree" -m "Data $(date -u +%Y-%m-%d)")
-          git push -q --force origin "$commit:refs/heads/animedb"
-          echo "Větev animedb uložená."
+          # Při výpadku GitHub odpoví na push chybou 500 a bez opakování by se
+          # ztratila celá noc i s počítadlem denního stropu (stalo se 4. 11. 2026).
+          for pauza in 60 120 300 600 900 1200 1200 0; do
+            if git push -q --force origin "$commit:refs/heads/animedb"; then
+              echo "Větev animedb uložená."
+              exit 0
+            fi
+            [ "$pauza" -gt 0 ] || break
+            echo "Push se nepovedl, další pokus za $pauza s."
+            sleep "$pauza"
+          done
+          echo "::error::Větev animedb se nepovedlo uložit."
+          exit 1
 
       # Web si data bere při každém nasazení a nasazuje se skoro denně.
       # Sám noční běh nasadí jen tehdy, když main 3 dny nic nedostal (šetří
@@ -210,8 +221,17 @@ jobs:
               git add -A
               tree=$(git write-tree)
               commit=$(git commit-tree "$tree" -m "AniList $(date -u +%Y-%m-%d)")
-              git -c "$HDR" push -q --force "$URL" "$commit:refs/heads/anilist"
-              echo "Větev anilist uložená."
+              for pauza in 60 300 600 0; do
+                if git -c "$HDR" push -q --force "$URL" "$commit:refs/heads/anilist"; then
+                  echo "Větev anilist uložená."
+                  exit 0
+                fi
+                [ "$pauza" -gt 0 ] || break
+                echo "Push se nepovedl, další pokus za $pauza s."
+                sleep "$pauza"
+              done
+              echo "::error::Větev anilist se nepovedlo uložit."
+              exit 1
             else
               echo "AniList zatím není stažený."
             fi

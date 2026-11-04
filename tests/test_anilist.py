@@ -45,6 +45,14 @@ class AniListTests(unittest.TestCase):
         runner.run()
         self.assertEqual(server.tags_calls, 1)
 
+    def test_otevreny_rez_neposila_horni_mez(self):
+        server = Server([media(1, 150000), media(2, 99999)])
+        runner = self.runner(server)
+        runner.run_snapshot()
+        self.assertEqual(len(dict(self.storage.items("anilist", "media"))), 2)
+        queries = [payload["variables"] for url, payload in server.calls if "popularity_greater" in payload["query"]]
+        self.assertTrue(any(query["greater"] == 99999 and "lesser" not in query for query in queries))
+
     def test_nad_5000_setkani_uprostred(self):
         rows = [media(i, 20) for i in range(1, 6102)]
         server = Server(rows)

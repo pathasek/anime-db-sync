@@ -258,9 +258,11 @@ class AniList:
                      "Page(page:$page,perPage:50){pageInfo{hasNextPage}"
                      "media(type:ANIME,sort:" + ("ID_DESC" if part["reverse"] else "ID") +
                      ",isAdult:$adult,popularity_greater:$greater,popularity_lesser:$lesser){" + FIELDS + "}}}")
-            variables = {"page": part["page"], "adult": part["adult"],
-                         "greater": part["lo"] - 1,
-                         "lesser": None if part["hi"] is None else part["hi"] + 1}
+            variables = {"page": part["page"], "adult": part["adult"], "greater": part["lo"] - 1}
+            # Otevřená horní mez: na explicitní null AniList odpoví HTTP 400,
+            # proměnná proto v dotazu úplně chybí.
+            if part["hi"] is not None:
+                variables["lesser"] = part["hi"] + 1
             response = self.query("snimek", query, variables)
             if response.status != 200:
                 self.state.failure("al_pages", key, self.today, response.status)
