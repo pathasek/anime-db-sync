@@ -3,6 +3,7 @@
 import contextlib
 from datetime import date
 import io
+import gzip
 import json
 from pathlib import Path
 import signal
@@ -141,18 +142,17 @@ class SyncWebTests(unittest.TestCase):
         self.assertEqual(set(meta["uplnost"]), {"list", "recs", "full", "staff", "chars", "stats", "anilist"})
         self.assertEqual(meta["uplnost"]["stats"], 0.5)
         core = self.read_web("core.json")
-        self.assertEqual(core["radky"][0][0], 1101)
-        duration = core["sloupce"].index("delka_min")
-        self.assertEqual([row[duration] for row in core["radky"]], [24, 113])
+        self.assertEqual(core["data"]["id"], [1101, 1102])
+        self.assertEqual(core["data"]["delka_min"], [24, 113])
         self.assertEqual(self.read_web("dict.json")["genres"]["710"], "Testovací žánr")
         self.assertEqual(self.read_web("dict.json")["tags"]["5101"][0], "Vymyšlený tag")
-        self.assertEqual(self.read_web("recs.json"), {"mal": [[1101, 1102, 42]], "al": [[1101, 1102, 7]]})
-        self.assertEqual(self.read_web("syn/0001.json")["1101"], "Vymyšlená synopse o hledání ztracené tužky.")
-        self.assertEqual(self.read_web("staff.json")["anime"]["1101"], [[2101, ["Director"]]])
-        self.assertEqual(self.read_web("chars/0001.json")["anime"]["1101"], [[3101, "Main", 3, [[2102, "Japanese"]]]])
+        self.assertEqual(self.read_web("recs.json"), {"mal": [1101, 1102, 42], "al": [1101, 1102, 7]})
+        self.assertEqual(self.read_web("syn/0002.json")["1101"], "Vymyšlená synopse o hledání ztracené tužky.")
+        self.assertEqual(self.read_web("staff.json")["anime"]["1101"], [[2101, 0]])
+        self.assertEqual(self.read_web("chars/0001.json")["anime"]["1101"], [[3101, 1, 3, 2102, 0]])
         self.assertEqual(self.read_web("stats.json")["1101"][-1], [0, 0, 0, 0, 0, 0, 0, 12, 0, 0])
         self.assertEqual(self.read_web("rel.json"), {"1101": [["Sequel", [1102]]]})
-        self.assertEqual(self.read_web("al_tags.json"), {"1101": [[5101, 85, 1]]})
+        self.assertEqual(self.read_web("al_core.json")["data"]["tagy"], [[5101, 85, 1]])
         before = {str(path.relative_to(self.root / "web")): path.read_bytes()
                   for path in (self.root / "web").rglob("*.json")}
         (self.root / "web" / "stare.json").write_text("{}")
@@ -161,29 +161,30 @@ class SyncWebTests(unittest.TestCase):
                  for path in (self.root / "web").rglob("*.json")}
         self.assertEqual(before, after)
         for name, size in meta["velikosti"].items():
-            self.assertEqual((self.root / "web" / name).stat().st_size, size, name)
+            content = (self.root / "web" / name).read_bytes()
+            self.assertEqual([len(content), len(gzip.compress(content, compresslevel=9, mtime=0))], size, name)
 
-    def test_pryc_vynechane_vsude_a_auto_okoli_od_data(self):
+    def test_pryc_vynechane_vsude_a_vychozi_cele_po_datu(self):
         storage, state = self.populate()
         state.failure("stats", 1102, date(2026, 11, 11), 404)
         state.save()
         meta = build_web.build(self.temp.name, date(2026, 11, 11), log=lambda line: None)
-        self.assertEqual(meta["al_tagy"], "okoli")
+        self.assertEqual(meta["al_tagy"], "cele")
         self.assertEqual(meta["pryc"], 1)
         self.assertEqual(meta["pocet"], 1)
         self.assertEqual(self.read_web("recs.json"), {"mal": [], "al": []})
         self.assertEqual(self.read_web("rel.json"), {"1101": []})
-        self.assertNotIn("1102", self.read_web("syn/0001.json"))
+        self.assertNotIn("1102", self.read_web("syn/0002.json"))
         row = storage.get("tenrai", "list", 1101)
         row["status"] = "Finished Airing"
         storage.put("tenrai", "list", 1101, row)
         # Při změně záznamu v paměti je potřeba jej výslovně označit jako změněný.
         storage.dirty.add(("tenrai", "list", 1))
         storage.flush()
-        build_web.build(self.temp.name, date(2026, 11, 11), log=lambda line: None)
-        self.assertEqual(self.read_web("al_tags.json"), {})
+        build_web.build(self.temp.name, date(2026, 11, 11), "okoli", log=lambda line: None)
+        self.assertEqual(self.read_web("al_core.json")["pocet"], 0)
         build_web.build(self.temp.name, date(2026, 11, 11), "cele", log=lambda line: None)
-        self.assertIn("1101", self.read_web("al_tags.json"))
+        self.assertEqual(self.read_web("al_core.json")["data"]["id"], [1101])
 
     def test_delka_a_prazdny_export(self):
         self.assertEqual(build_web.duration_minutes("30 sec"), 0.5)

@@ -7,6 +7,13 @@ Noční stahování databáze anime pro osobní, nekomerční web.
 - **Data tady nejsou.** Repo obsahuje jen skript a workflow. Stažená data jdou do soukromého úložiště webu a web z nich používá jen zpracované soubory.
 - **Výjimka do 11. 11. 2026:** data AniListu jsou se svolením týmu AniList i ve větvi `anilist`. Potom ji workflow samo smaže.
 
+Webové soubory (`python build_web.py --data <složka>`, výstup do `web/`, formát verze 2):
+
+- **Hned po přepnutí:** `meta.json`, `core.json`, `dict.json`, `al_core.json`. `meta.velikosti` uvádí u každého souboru `[bajty, gzip]` (bez `meta.json` samotného).
+- **Na vyžádání:** `titles.json`, `syn/`, `recs.json`, `staff.json`, `cast.json`, `chars/`, `stats.json`, `rel.json`, `al_detail/`, `al_lide/`. Velikosti bloků jsou v `meta.bloky`.
+- **`--al-tagy cele|okoli`:** výchozí `cele` (AniList u všech anime). `okoli` omezí `al_core`, `al_detail`, `al_lide`, hrany `recs.al`, aliasy AniListu v `titles` a zálohu synopse na malé okolí.
+- Výstup je deterministický (stejná data, stejné bajty) a žádný soubor nepřesáhne 50 MB.
+
 Testy (bez sítě):
 
 ```

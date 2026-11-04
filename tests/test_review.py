@@ -521,17 +521,20 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(any("staff(page:2" in payload["query"] for payload in queries))
         meta = build_web.build(self.root, self.today, log=lambda line: None)
         self.assertEqual(meta["anilist"]["pocet"], 2)
-        exported = json.loads((self.root / "web/al/0001.json").read_text(encoding="utf-8"))
+        exported = json.loads((self.root / "web/al_detail/0011.json").read_text(encoding="utf-8"))
         self.assertEqual(set(exported), {"1101", "1102"})
-        self.assertEqual(exported["1101"]["al_id"], 1)
-        self.assertEqual([row[0] for row in exported["1101"]["staff"]], [1, 2])
-        self.assertEqual(exported["1102"], {**compact(rows[1]), "al_id": 2})
+        self.assertEqual(exported["1101"]["al"], 1)
+        people = json.loads((self.root / "web/al_lide/0011.json").read_text(encoding="utf-8"))
+        self.assertEqual([row[0] for row in people["1101"]["staff"]], [1, 2])
+        self.assertEqual(people["1102"], {key: compact(rows[1])[key] for key in ("staff", "characters")})
+        self.assertEqual(exported["1102"], {**{key: value for key, value in compact(rows[1]).items()
+                                                if key not in build_web.AL_EXCLUDE}, "al": 2})
         before = {path.relative_to(self.root / "web"): path.read_bytes() for path in (self.root / "web").rglob("*.json")}
         build_web.build(self.root, self.today, log=lambda line: None)
         self.assertEqual(before, {path.relative_to(self.root / "web"): path.read_bytes()
                                  for path in (self.root / "web").rglob("*.json")})
         for name, size in meta["velikosti"].items():
-            self.assertEqual((self.root / "web" / name).stat().st_size, size)
+            self.assertEqual((self.root / "web" / name).stat().st_size, size[0])
 
     def test_vzorek_jen_vybrane_stranky_i_pri_starsich_datech(self):
         state, storage = State(self.root), Storage(self.root)
@@ -561,11 +564,11 @@ class ReviewTests(unittest.TestCase):
         al_state = State(self.root, "anilist")
         al_state.data["anilist"]["neighborhood"] = [1102]
         al_state.save()
-        build_web.build(self.root, date(2026, 11, 11), log=lambda line: None)
-        result = json.loads((self.root / "web/al/0001.json").read_text(encoding="utf-8"))
+        build_web.build(self.root, date(2026, 11, 11), "okoli", log=lambda line: None)
+        result = json.loads((self.root / "web/al_detail/0011.json").read_text(encoding="utf-8"))
         self.assertEqual(set(result), {"1102"})
         build_web.build(self.root, date(2026, 11, 11), "cele", log=lambda line: None)
-        result = json.loads((self.root / "web/al/0001.json").read_text(encoding="utf-8"))
+        result = json.loads((self.root / "web/al_detail/0011.json").read_text(encoding="utf-8"))
         self.assertEqual(set(result), {"1101", "1102"})
 
     def test_necekana_vyjimka_vypise_typ_a_nase_misto_bez_textu(self):
