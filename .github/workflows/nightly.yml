@@ -2,9 +2,7 @@ name: Noční stahování databáze
 
 # Stahuje databázi MAL (přes Tenrai) a AniList pro osobní web. Surová data,
 # stav a soubory pro web jdou do soukromé větve animedb jedním commitem bez
-# historie, v tomhle veřejném repu leží jen skript. Výjimka: AniList je do
-# 11. 11. 2026 i ve větvi anilist tohoto repa (svolení AniListu), od 11. 11.
-# ji workflow samo smaže.
+# historie, v tomhle veřejném repu leží jen skript, žádná data.
 # Logy jsou veřejné: jen počty, stav a velikosti, nikdy obsah odpovědí.
 
 on:
@@ -17,10 +15,10 @@ on:
         required: false
         default: '270'
 
-# Zápis jen kvůli větvi anilist (do 11. 11. 2026). Do soukromého repa se
-# píše přes secret ANIMEDB_TOKEN (fine-grained, Contents jen na to repo).
+# Do tohohle repa se nezapisuje. Do soukromého repa se píše přes secret
+# ANIMEDB_TOKEN (fine-grained, Contents jen na to repo).
 permissions:
-  contents: write
+  contents: read
 
 # Ruční a plánovaný běh nikdy souběžně: strop 108 dotazů za minutu platí
 # pro všechny běhy dohromady, jako by runnery měly jednu IP.
@@ -30,7 +28,6 @@ concurrency:
 
 env:
   SOUKROME_REPO: pathasek/anime-list-web-src
-  SVOLENI_ANILIST_DO: '20261111'
 
 defaults:
   run:
@@ -196,46 +193,4 @@ jobs:
             echo "Main $dni dní beze změny, spuštěno nasazení webu."
           else
             echo "Main změněn před $dni dny, data přibalí běžné nasazení."
-          fi
-
-      - name: AniList ve veřejném repu (jen do 11. 11. 2026)
-        if: always() && steps.data.outcome == 'success'
-        continue-on-error: true
-        env:
-          TOKEN: ${{ github.token }}
-        run: |
-          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
-          echo "::add-mask::$AUTH"
-          HDR="http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH"
-          URL="https://github.com/$GITHUB_REPOSITORY.git"
-          A="$RUNNER_TEMP/animedb/raw/anilist"
-          if [ "$(date -u +%Y%m%d)" -lt "$SVOLENI_ANILIST_DO" ]; then
-            if [ -f "$A/meta.json" ]; then
-              P="$RUNNER_TEMP/anilist-verejne"
-              mkdir -p "$P"
-              cp -r "$A" "$P/anilist"
-              git init -q "$P"
-              cd "$P"
-              git config user.name "anime-db-sync"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git add -A
-              tree=$(git write-tree)
-              commit=$(git commit-tree "$tree" -m "AniList $(date -u +%Y-%m-%d)")
-              for pauza in 60 300 600 0; do
-                if git -c "$HDR" push -q --force "$URL" "$commit:refs/heads/anilist"; then
-                  echo "Větev anilist uložená."
-                  exit 0
-                fi
-                [ "$pauza" -gt 0 ] || break
-                echo "Push se nepovedl, další pokus za $pauza s."
-                sleep "$pauza"
-              done
-              echo "::error::Větev anilist se nepovedlo uložit."
-              exit 1
-            else
-              echo "AniList zatím není stažený."
-            fi
-          elif git ls-remote --exit-code --heads "$URL" anilist > /dev/null; then
-            git -c "$HDR" push -q "$URL" --delete anilist
-            echo "Svolení AniListu skončilo, větev anilist smazaná."
           fi
