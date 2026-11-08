@@ -307,7 +307,8 @@ class Novinky:
             return {"v": 1, "anime": {}}
         try:
             fronta = json.loads(cesta.read_text(encoding="utf-8"))
-            if fronta.get("v") != 1 or not isinstance(fronta.get("anime"), dict)                     or not all(isinstance(polozka, dict) for polozka in fronta["anime"].values()):
+            if (fronta.get("v") != 1 or not isinstance(fronta.get("anime"), dict)
+                    or not all(isinstance(polozka, dict) for polozka in fronta["anime"].values())):
                 raise ValueError
         except (OSError, ValueError, AttributeError):
             raise Necekane("poškozená fronta") from None
