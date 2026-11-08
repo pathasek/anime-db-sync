@@ -10,6 +10,7 @@ import re
 import shutil
 import uuid
 
+import novinky
 from anilist import metadata
 from osobni import neighborhood
 from state import State, atomic_write, json_bytes, replace
@@ -117,6 +118,10 @@ def build(directory, today=None, al_tags="cele", log=print):
                 loaded += 1
                 yield ident, row
         complete[endpoint] = loaded / count if count else 0.0
+
+    texty = novinky.souhrn(state, root / "texty")
+    if texty is not None:
+        complete["texty"] = texty
 
     sizes = {}
     staging = root / (".web-novy-" + uuid.uuid4().hex)

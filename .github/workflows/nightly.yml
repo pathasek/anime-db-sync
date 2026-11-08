@@ -4,6 +4,8 @@ name: Noční stahování databáze
 # stav a soubory pro web jdou do soukromé větve animedb jedním commitem bez
 # historie, v tomhle veřejném repu leží jen skript, žádná data.
 # Logy jsou veřejné: jen počty, stav a velikosti, nikdy obsah odpovědí.
+# Složka texty/ ve větvi animedb nese denní soubory nových recenzí a posudků
+# a frontu pro aktualizaci vektorů (texty jsou data Tenrai, jen soukromě).
 
 on:
   schedule:
@@ -14,6 +16,11 @@ on:
         description: 'Kolik minut stahovat (nejvýš 270)'
         required: false
         default: '270'
+      texty_cely:
+        description: 'Celý průchod výpisů recenzí a posudků (úpravy, smazané), asi 70 minut navíc'
+        type: boolean
+        required: false
+        default: false
 
 # Do tohohle repa se nezapisuje. Do soukromého repa se píše přes secret
 # ANIMEDB_TOKEN (fine-grained, Contents jen na to repo).
@@ -81,9 +88,9 @@ jobs:
             exit 1
           fi
           # Při pipefail by find nad chybějící složkou shodil první běh.
-          mkdir -p "$D/raw"
-          (cd "$D" && find raw -type f | sort) > "$RUNNER_TEMP/raw_pred.txt"
-          echo "Souborů v raw/ před během: $(wc -l < "$RUNNER_TEMP/raw_pred.txt")"
+          mkdir -p "$D/raw" "$D/texty"
+          (cd "$D" && find raw texty -type f | sort) > "$RUNNER_TEMP/raw_pred.txt"
+          echo "Souborů v raw/ a texty/ před během: $(wc -l < "$RUNNER_TEMP/raw_pred.txt")"
 
       # Okolí AniListu potřebuje viděná anime a Plan to Watch z dat webu.
       # Bez nich jede okolí jen z vysílaných a ohlášených, proto smí selhat.
@@ -107,15 +114,19 @@ jobs:
         if: steps.data.outcome == 'success'
         env:
           MINUTY: ${{ inputs.minuty || '270' }}
+          TEXTY_CELY: ${{ inputs.texty_cely && '--texty-cely' || '' }}
         run: |
           D="$RUNNER_TEMP/animedb"
           O="$RUNNER_TEMP/osobni"
+          # Plánované mazání starých souborů texty/ (60 dní) se zapíše sem před mazáním.
+          : > "$RUNNER_TEMP/texty_smazano.txt"
           python sync.py --zdroj anilist --data "$D" --osobni "$O" --minutes "$MINUTY" --anilist-rate 20 &
           al=$!
           # Zrušení běhu ukončí i proces AniListu, ať stihne uložit stav.
           trap 'kill -TERM "$al" 2> /dev/null' INT TERM
           set +e
-          python sync.py --zdroj tenrai --data "$D" --osobni "$O" --minutes "$MINUTY" --rate 108
+          # Novinky recenzí a posudků čte jen proces Tenrai, před zbytkem stahování.
+          python sync.py --zdroj tenrai --data "$D" --osobni "$O" --minutes "$MINUTY" --rate 108 --texty --texty-smazano "$RUNNER_TEMP/texty_smazano.txt" $TEXTY_CELY
           tenrai_rc=$?
           wait "$al"
           al_rc=$?
@@ -141,10 +152,14 @@ jobs:
           fi
           # Pojistky: žádný dřív uložený blok nesmí zmizet a GitHub odmítá
           # soubory nad 100 MB.
-          find raw -type f | sort > "$RUNNER_TEMP/raw_po.txt"
-          chybi=$(comm -23 "$RUNNER_TEMP/raw_pred.txt" "$RUNNER_TEMP/raw_po.txt" | wc -l)
+          find raw texty -type f | sort > "$RUNNER_TEMP/raw_po.txt"
+          # Plánovaně smazané soubory texty/ se odečtou, poplach jen při nečekaném zmizení.
+          [ -f "$RUNNER_TEMP/texty_smazano.txt" ] || : > "$RUNNER_TEMP/texty_smazano.txt"
+          sort -u "$RUNNER_TEMP/raw_po.txt" "$RUNNER_TEMP/texty_smazano.txt" > "$RUNNER_TEMP/raw_po_a_smazano.txt"
+          chybi=$(comm -23 "$RUNNER_TEMP/raw_pred.txt" "$RUNNER_TEMP/raw_po_a_smazano.txt" | wc -l)
+          echo "Plánovaně smazáno souborů texty/: $(wc -l < "$RUNNER_TEMP/texty_smazano.txt")."
           if [ "$chybi" -gt 0 ]; then
-            echo "::error::Z raw/ zmizelo $chybi dřív uložených souborů, neukládám."
+            echo "::error::Z raw/ nebo texty/ zmizelo $chybi dřív uložených souborů, neukládám."
             exit 1
           fi
           po=$(wc -l < "$RUNNER_TEMP/raw_po.txt")
@@ -153,7 +168,7 @@ jobs:
             echo "::error::$velke souborů má přes 95 MB, neukládám."
             exit 1
           fi
-          echo "raw/: $po souborů, $(du -sh raw | cut -f1). web/: $(find web -type f | wc -l) souborů, $(du -sh web | cut -f1)."
+          echo "raw/ a texty/: $po souborů, raw $(du -sh raw | cut -f1), texty $(du -sh texty | cut -f1). web/: $(find web -type f | wc -l) souborů, $(du -sh web | cut -f1)."
           git config user.name "anime-db-sync"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A

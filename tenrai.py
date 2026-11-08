@@ -6,6 +6,9 @@ BASE = "https://api.tenrai.org/v1"
 ENDPOINTS = ("list", "recs", "full", "staff", "chars", "stats")
 PATHS = {"recs": "recommendations", "full": "full", "staff": "staff",
          "chars": "characters", "stats": "statistics"}
+# Souhrnné výpisy od nejnovějších: recenze po 50, posudky po 100 na stránku.
+FEEDS = {"recenze": ("reviews/anime", (("spoilers", "true"), ("preliminary", "true"))),
+         "posudky": ("recommendations/anime", ())}
 
 
 def url(endpoint="list", ident=None, page=1, mode="asc"):
@@ -17,6 +20,11 @@ def url(endpoint="list", ident=None, page=1, mode="asc"):
     else:
         params.update(order_by="mal_id", sort=mode)
     return BASE + "/anime?" + urlencode(params)
+
+
+def feed_url(feed, page):
+    path, params = FEEDS[feed]
+    return f"{BASE}/{path}?" + urlencode((("page", int(page)),) + params)
 
 
 def compact(value, path=()):

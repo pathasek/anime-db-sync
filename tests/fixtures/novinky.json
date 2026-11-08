@@ -1,0 +1,25 @@
+{
+  "recenze": {
+    "mal_id": 900001,
+    "url": "https://example.invalid/recenze/900001",
+    "type": "Anime",
+    "reactions": {"overall": 3, "nice": 1, "love_it": 1, "funny": 0, "confusing": 0, "informative": 1, "well_written": 0, "creative": 0},
+    "date": "2026-11-07T18:09:00+00:00",
+    "review": "Vymyšlený text recenze o hledání ztracené tužky.",
+    "score": 7,
+    "tags": ["Recommended"],
+    "is_spoiler": false,
+    "is_preliminary": false,
+    "episodes_watched": null,
+    "entry": {"mal_id": 1101, "url": "https://example.invalid/anime/1101", "images": {"jpg": {}, "webp": {}}, "title": "Vymyšlené anime"},
+    "user": {"username": "vymyslenyuzivatel", "url": "https://example.invalid/u", "images": {"jpg": {}, "webp": {}}}
+  },
+  "posudek": {
+    "mal_id": "1101-1102",
+    "entry": [{"mal_id": 1101, "url": "https://example.invalid/anime/1101", "images": {}, "title": "A"},
+              {"mal_id": 1102, "url": "https://example.invalid/anime/1102", "images": {}, "title": "B"}],
+    "content": "Vymyšlený posudek: obě díla spojuje tužka.",
+    "date": "2026-11-07T00:00:00+00:00",
+    "user": {"url": "https://example.invalid/u", "username": "vymyslenyuzivatel"}
+  }
+}

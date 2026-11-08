@@ -9,11 +9,12 @@ import traceback
 
 from anilist import AniList, ANILIST_SVOLENI_DO, metadata
 from fronta import Tenrai
+from novinky import Novinky
 from state import State
 from tempo import Client, Limiter, StopNight, StopSource, transport
 from uloziste import Storage
 
-MODULES = {"sync.py", "tenrai.py", "anilist.py", "fronta.py", "state.py",
+MODULES = {"sync.py", "tenrai.py", "anilist.py", "fronta.py", "novinky.py", "state.py",
            "tempo.py", "uloziste.py", "osobni.py", "build_web.py"}
 
 
@@ -38,6 +39,13 @@ def parser():
     cli.add_argument("--osobni")
     cli.add_argument("--dnes", type=date.fromisoformat)
     cli.add_argument("--max-dotazu", type=int)
+    cli.add_argument("--texty", action="store_true",
+                     help="Před stahováním Tenrai přečíst novinky recenzí a posudků")
+    cli.add_argument("--texty-cely", action="store_true",
+                     help="Čtvrtletní celý průchod výpisů (úpravy a smazané), platí i bez --texty")
+    cli.add_argument("--texty-smazano", help="Soubor, kam se před úklidem zapíší plánovaně mazané cesty texty/…")
+    cli.add_argument("--texty-od", type=date.fromisoformat,
+                     help="Počáteční datum, dokud čtečky nemají vlastní poslední viděné")
     return cli
 
 
@@ -131,6 +139,11 @@ def run(args, send=transport, now=time.monotonic, sleep=time.sleep, utcnow=None,
                     args.osobni, wall_now=lambda: utcnow().timestamp(), log=log,
                     today_fn=lambda: args.dnes or utcnow().date(), sample_ids=sample_ids)
             try:
+                if source == "tenrai" and (args.texty or args.texty_cely):
+                    texty = Novinky(client, state, Path(args.data) / "texty", today, deadline, log,
+                                    cely=args.texty_cely, od=args.texty_od, smazano=args.texty_smazano)
+                    if not texty.run():
+                        result = 1
                 job.run()
             except StopSource:
                 log(f"{source}: zdroj pro tuto noc ukončen")
